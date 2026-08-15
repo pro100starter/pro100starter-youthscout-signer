@@ -28,5 +28,5 @@ jobs:
       - name: Reject accidental sensitive material
         run: |
           set -euo pipefail
-          ! grep -R -I -E --exclude-dir=.git --exclude='*.sealed.json' \
+          ! grep -R -I -E --exclude-dir=.git --exclude='*.sealed.json' --exclude='validate.yml' \
             '(BEGIN (RSA |ENCRYPTED )?PRIVATE KEY|ghp_|github_pat_|bot[0-9]+:|TELEGRAM.*TOKEN|-100[0-9]{6,20})' .
