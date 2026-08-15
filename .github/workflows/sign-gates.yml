@@ -1,0 +1,67 @@
+name: Sign approved YouthScout gates
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youthscout-gate-signing
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: github.ref == 'refs/heads/main'
+    name: Sign pending gate requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: youthscout-signing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Assert immutable main revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --disable-pip-version-check cryptography==48.0.1
+      - name: Decrypt, validate, and sign two approved gates
+        env:
+          AUDIT_SIGNING_KEY: ${{ secrets.AUDIT_SIGNING_KEY }}
+          AUDIT_SIGNING_KEY_PASSPHRASE: ${{ secrets.AUDIT_SIGNING_KEY_PASSPHRASE }}
+          DEMO_SIGNING_KEY: ${{ secrets.DEMO_SIGNING_KEY }}
+          DEMO_SIGNING_KEY_PASSPHRASE: ${{ secrets.DEMO_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in AUDIT_SIGNING_KEY AUDIT_SIGNING_KEY_PASSPHRASE DEMO_SIGNING_KEY DEMO_SIGNING_KEY_PASSPHRASE; do test -n "${!name}"; done
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          rm -rf signed-gates
+          mkdir -p "$work/requests" signed-gates
+          printf '%s' "$AUDIT_SIGNING_KEY" > "$work/audit-private.pem"
+          printf '%s' "$DEMO_SIGNING_KEY" > "$work/demo-private.pem"
+          openssl pkey -in "$work/audit-private.pem" -passin env:AUDIT_SIGNING_KEY_PASSPHRASE -pubout > "$work/audit-public.pem"
+          openssl pkey -in "$work/demo-private.pem" -passin env:DEMO_SIGNING_KEY_PASSPHRASE -pubout > "$work/demo-public.pem"
+          cmp -s "$work/audit-public.pem" youthscout-audit-reviewer-public.pem
+          cmp -s "$work/demo-public.pem" youthscout-demo-reviewer-public.pem
+          python scripts/gate_envelope.py decrypt --private-key "$work/audit-private.pem" --passphrase-env AUDIT_SIGNING_KEY_PASSPHRASE --input requests/pending/AUDIT_FILTER_GATE.sealed.json --output "$work/requests/AUDIT_FILTER_GATE.unsigned.json"
+          python scripts/gate_envelope.py decrypt --private-key "$work/demo-private.pem" --passphrase-env DEMO_SIGNING_KEY_PASSPHRASE --input requests/pending/MAIN_DEMO_GATE.sealed.json --output "$work/requests/MAIN_DEMO_GATE.unsigned.json"
+          python scripts/validate_gate_requests.py --request-dir "$work/requests"
+          openssl dgst -sha256 -sign "$work/audit-private.pem" -passin env:AUDIT_SIGNING_KEY_PASSPHRASE -out signed-gates/AUDIT_FILTER_GATE.unsigned.json.sig "$work/requests/AUDIT_FILTER_GATE.unsigned.json"
+          openssl dgst -sha256 -sign "$work/demo-private.pem" -passin env:DEMO_SIGNING_KEY_PASSPHRASE -out signed-gates/MAIN_DEMO_GATE.unsigned.json.sig "$work/requests/MAIN_DEMO_GATE.unsigned.json"
+          openssl dgst -sha256 -verify "$work/audit-public.pem" -signature signed-gates/AUDIT_FILTER_GATE.unsigned.json.sig "$work/requests/AUDIT_FILTER_GATE.unsigned.json"
+          openssl dgst -sha256 -verify "$work/demo-public.pem" -signature signed-gates/MAIN_DEMO_GATE.unsigned.json.sig "$work/requests/MAIN_DEMO_GATE.unsigned.json"
+          test "$(find signed-gates -maxdepth 1 -type f | wc -l)" -eq 2
+          test -f signed-gates/AUDIT_FILTER_GATE.unsigned.json.sig
+          test -f signed-gates/MAIN_DEMO_GATE.unsigned.json.sig
+      - uses: actions/upload-artifact@v4
+        with:
+          name: youthscout-gate-signatures
+          path: |
+            signed-gates/AUDIT_FILTER_GATE.unsigned.json.sig
+            signed-gates/MAIN_DEMO_GATE.unsigned.json.sig
+          if-no-files-found: error
+          retention-days: 7

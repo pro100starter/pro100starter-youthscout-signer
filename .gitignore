@@ -1,0 +1,10 @@
+# Never commit private key material, credentials, or private deployment exports.
+*.key
+*.p12
+*.pfx
+*.private.pem
+.env
+__pycache__/
+.pytest_cache/
+signed-gates/*.sig
+!signed-gates/.gitkeep
