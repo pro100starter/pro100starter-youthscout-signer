@@ -26,7 +26,4 @@ jobs:
       - run: pytest -q
       - run: python -m py_compile scripts/*.py
       - name: Reject accidental sensitive material
-        run: |
-          set -euo pipefail
-          ! grep -R -I -E --exclude-dir=.git --exclude='*.sealed.json' \
-            '(BEGIN (RSA |ENCRYPTED )?PRIVATE KEY|ghp_|github_pat_|bot[0-9]+:|TELEGRAM.*TOKEN|-100[0-9]{6,20})' .
+        run: python scripts/public_tree_scan.py
